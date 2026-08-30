@@ -122,36 +122,59 @@ async function launch(server) {
   };
   if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
 
+  send('progress', { percent: 100, phase: 'Lancement de Novus...' });
   send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
 
-  try {
-    // minecraft-launcher-core 3.x returns an EventEmitter launcher and exposes
-    // the underlying child process through the launcher's events. The previous
-    // code incorrectly called .on() on the return value of launch().
-    launcher.on('debug', m => send('game-log', { text: String(m) }));
-    launcher.on('data', m => send('game-log', { text: String(m) }));
-    launcher.on('error', e => {
-      gameProcess = null;
-      gameLauncher = null;
-      launchInProgress = false;
-      send('game-error', { message: e.message || String(e) });
-    });
-    launcher.on('close', code => {
-      gameProcess = null;
-      gameLauncher = null;
-      launchInProgress = false;
-      send('game-exit', { code });
-    });
-
-    const result = launcher.launch(options);
-    gameProcess = result || launcher;
+  // minecraft-launcher-core 3.18.x exposes events on Client, while launch()
+  // is async and resolves to the actual ChildProcess. The old code stored the
+  // Promise returned by launch() as gameProcess, which caused the launcher/UI
+  // to treat a Promise as a process and led to errors such as
+  // "processHandle.on is not a function".
+  launcher.on('debug', m => send('game-log', { text: String(m) }));
+  launcher.on('data', m => send('game-log', { text: String(m) }));
+  launcher.on('arguments', args => send('game-log', { text: `Minecraft arguments: ${args.join(' ')}` }));
+  launcher.on('error', e => {
+    gameProcess = null;
+    gameLauncher = null;
     launchInProgress = false;
-    send('game-started', { started: true });
-    return { ok: true };
+    send('game-error', { message: e?.message || String(e) });
+  });
+  launcher.on('close', code => {
+    gameProcess = null;
+    gameLauncher = null;
+    launchInProgress = false;
+    send('game-exit', { code });
+  });
+
+  try {
+    const processHandle = await launcher.launch(options);
+
+    if (!processHandle) {
+      gameProcess = null;
+      gameLauncher = null;
+      launchInProgress = false;
+      throw new Error('Minecraft n’a pas pu être lancé. Vérifie Java et les logs Novus.');
+    }
+
+    // IMPORTANT: processHandle is the real ChildProcess. Never call .on()
+    // on the Promise returned by launcher.launch().
+    if (typeof processHandle.on !== 'function') {
+      gameProcess = null;
+      gameLauncher = null;
+      launchInProgress = false;
+      throw new Error(`Le processus Minecraft retourné est invalide (${typeof processHandle}).`);
+    }
+
+    gameProcess = processHandle;
+    launchInProgress = false;
+    send('game-started', { started: true, pid: processHandle.pid || null });
+    send('status', { text: 'Minecraft est lancé.' });
+    return { ok: true, pid: processHandle.pid || null };
   } catch (error) {
     gameProcess = null;
     gameLauncher = null;
     launchInProgress = false;
+    send('game-error', { message: error?.stack || error?.message || String(error) });
     throw error;
   }
 }
