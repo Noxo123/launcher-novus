@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Novus Launcher</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">NOVUS</div>
+      <div class="version" id="version">V1</div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <p class="eyebrow">MINECRAFT MODDED</p>
+        <h1 id="packName">Novus Modded</h1>
+        <p id="details">Minecraft • Fabric • Create</p>
+      </div>
+      <div class="status-dot" id="statusDot"></div>
+    </section>
+
+    <section class="card">
+      <div class="row"><span id="status">Prêt à installer</span><span id="percent">0%</span></div>
+      <div class="progress"><div id="bar"></div></div>
+      <div class="phase" id="phase">Aucune opération en cours</div>
+    </section>
+
+    <section class="actions">
+      <button id="install" class="secondary">INSTALLER / METTRE À JOUR</button>
+      <button id="play" class="primary" disabled>JOUER</button>
+    </section>
+
+    <footer>
+      <span id="gameDir"></span>
+      <span>Novus Launcher 0.1.0</span>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
