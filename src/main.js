@@ -10,6 +10,7 @@ const MANIFEST_PATH = path.join(__dirname, '..', 'modpack', 'manifest.json');
 const FABRIC_INSTALLER_URL = 'https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar';
 let win;
 let gameProcess = null;
+let gameLauncher = null;
 let launchInProgress = false;
 
 function send(event, payload) { if (win && !win.isDestroyed()) win.webContents.send(event, payload); }
@@ -19,10 +20,6 @@ function createWindow() {
 }
 function readManifest() { return JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')); }
 function sha256(file) { return new Promise((resolve, reject) => { const hash = crypto.createHash('sha256'); const stream = fs.createReadStream(file); stream.on('error', reject); stream.on('data', c => hash.update(c)); stream.on('end', () => resolve(hash.digest('hex'))); }); }
-function offlineAuth(name = 'NovusPlayer') {
-  const uuid = crypto.createHash('md5').update(`OfflinePlayer:${name}`).digest('hex');
-  return { access_token: '0', client_token: crypto.randomUUID(), uuid, name, user_properties: '{}', meta: { type: 'mojang' } };
-}
 async function download(url, destination, label, expectedSha256) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   if (fs.existsSync(destination) && expectedSha256) {
@@ -110,47 +107,58 @@ async function launch(server) {
   if (!fs.existsSync(fabricVersionJson(manifest))) throw new Error('Fabric est incomplet. Fais une mise à jour.');
   await verifyMods(manifest);
 
-  // Prevent two rapid clicks / simultaneous IPC calls from starting two clients.
   if (launchInProgress || gameProcess) throw new Error('Minecraft est déjà en cours de lancement ou déjà lancé.');
   launchInProgress = true;
 
+  const launcher = new Client();
+  gameLauncher = launcher;
+  const options = {
+    authorization: offlineAuth(manifest.playerName || 'NovusPlayer'),
+    root: GAME_DIR,
+    version: { number: fabricVersionId(manifest), type: 'custom' },
+    memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
+    javaPath: javaCommand(),
+    overrides: { detached: false }
+  };
+  if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
+
+  send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
+
   try {
-    const launcher = new Client();
-    const options = {
-      authorization: offlineAuth(manifest.playerName || 'NovusPlayer'),
-      root: GAME_DIR,
-      version: { number: fabricVersionId(manifest), type: 'custom' },
-      memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
-      javaPath: javaCommand(),
-      overrides: { detached: false }
-    };
-    if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
-
-    send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
-    const processHandle = launcher.launch(options);
-    gameProcess = processHandle;
-    send('game-started', { started: true });
-
-    processHandle.on('close', code => {
+    // minecraft-launcher-core 3.x returns an EventEmitter launcher and exposes
+    // the underlying child process through the launcher's events. The previous
+    // code incorrectly called .on() on the return value of launch().
+    launcher.on('debug', m => send('game-log', { text: String(m) }));
+    launcher.on('data', m => send('game-log', { text: String(m) }));
+    launcher.on('error', e => {
       gameProcess = null;
-      launchInProgress = false;
-      send('game-exit', { code });
-    });
-    processHandle.on('error', e => {
-      gameProcess = null;
+      gameLauncher = null;
       launchInProgress = false;
       send('game-error', { message: e.message || String(e) });
     });
-    launcher.on('debug', m => send('game-log', { text: String(m) }));
-    launcher.on('data', m => send('game-log', { text: String(m) }));
-    launcher.on('error', e => send('game-error', { message: e.message || String(e) }));
+    launcher.on('close', code => {
+      gameProcess = null;
+      gameLauncher = null;
+      launchInProgress = false;
+      send('game-exit', { code });
+    });
 
+    const result = launcher.launch(options);
+    gameProcess = result || launcher;
+    launchInProgress = false;
+    send('game-started', { started: true });
     return { ok: true };
   } catch (error) {
     gameProcess = null;
+    gameLauncher = null;
     launchInProgress = false;
     throw error;
   }
+}
+
+function offlineAuth(name = 'NovusPlayer') {
+  const uuid = crypto.createHash('md5').update(`OfflinePlayer:${name}`).digest('hex');
+  return { access_token: '0', client_token: crypto.randomUUID(), uuid, name, user_properties: '{}', meta: { type: 'mojang' } };
 }
 
 ipcMain.handle('get-info', () => {
