@@ -31,29 +31,24 @@ jobs:
             npm install
           }
 
-      - name: Build application
+      - name: Build Windows installer
         shell: pwsh
         run: npm run build
 
-      - name: Package Windows EXE
-        shell: pwsh
-        run: npm run dist:win
-
-      - name: List generated files
+      - name: Verify EXE
         shell: pwsh
         run: |
-          Write-Host '=== Generated installers ==='
-          Get-ChildItem -Path . -Recurse -File |
-            Where-Object { $_.Extension -in '.exe', '.msi', '.zip' } |
-            Select-Object FullName, Length
+          $exe = Get-ChildItem -Path dist -Filter *.exe -File -ErrorAction SilentlyContinue
+          if (-not $exe) {
+            Write-Error 'Aucun fichier EXE n''a été généré dans dist/.'
+            exit 1
+          }
+          $exe | Select-Object FullName, Length
 
-      - name: Upload EXE artifact
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: launcher-novus-windows
-          path: |
-            dist/*.exe
-            dist/*.msi
-            dist/*.zip
+          path: dist/*.exe
           if-no-files-found: error
           retention-days: 30
