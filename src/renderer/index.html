@@ -1,76 +1,12 @@
 <!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Novus Launcher</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self';style-src 'self' 'unsafe-inline';script-src 'self';img-src 'self' data:"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Novus Launcher</title><link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="logo"><span>N</span><div>NOVUS<small>LAUNCHER</small></div></div>
-      <nav>
-        <button class="nav-item active"><b>⌂</b> Accueil</button>
-        <button class="nav-item"><b>◈</b> Modpack</button>
-        <button class="nav-item"><b>⚙</b> Paramètres</button>
-      </nav>
-      <div class="sidebar-bottom">
-        <div class="account"><div class="avatar">N</div><div><strong>Novus Player</strong><small>Compte local • V1</small></div></div>
-      </div>
-    </aside>
-
-    <main class="content">
-      <header class="topbar">
-        <div><span class="live-dot"></span><span id="serverStatus">SERVEUR EN LIGNE</span></div>
-        <span class="build">v<span id="version">0.1.0</span></span>
-      </header>
-
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="eyebrow">MINECRAFT MODDED</div>
-          <h1 id="packName">Novus Modded</h1>
-          <p id="details">Minecraft 1.20.1 • Fabric • Create</p>
-          <div class="hero-tags"><span>CREATE</span><span>SURVIE</span><span>INDUSTRIE</span></div>
-        </div>
-        <div class="hero-mark">N</div>
-      </section>
-
-      <section class="play-panel">
-        <div class="play-info">
-          <div class="label">ÉTAT DU JEU</div>
-          <strong id="status">Prêt à installer</strong>
-          <span id="phase">Aucune opération en cours</span>
-        </div>
-        <div class="progress-wrap"><div class="progress"><div id="bar"></div></div><span id="percent">0%</span></div>
-        <div class="actions">
-          <button id="install" class="secondary">INSTALLER / METTRE À JOUR</button>
-          <button id="play" class="primary" disabled><span>▶</span> JOUER</button>
-        </div>
-      </section>
-
-      <section class="grid">
-        <article class="info-card">
-          <div class="card-title"><span>◉</span> SERVEUR</div>
-          <div class="server-row"><div class="online"></div><strong>Novus Modded</strong><span class="pill">EN LIGNE</span></div>
-          <div class="server-meta"><span>IP à configurer</span><span>— joueurs</span></div>
-        </article>
-        <article class="info-card">
-          <div class="card-title"><span>◆</span> MODPACK</div>
-          <div class="stat"><strong id="modCount">Create & extensions</strong><span>VERSION <b id="packVersion">0.1.0</b></span></div>
-          <div class="server-meta"><span>Installation automatique</span><span>SHA-256</span></div>
-        </article>
-        <article class="info-card news">
-          <div class="card-title"><span>✦</span> ACTUALITÉS</div>
-          <strong>Bienvenue sur Novus</strong>
-          <p>Le launcher prépare automatiquement ton environnement Minecraft moddé.</p>
-        </article>
-      </section>
-
-      <footer><span id="gameDir"></span><span>© Novus • Launcher V1</span></footer>
-    </main>
-  </div>
-  <script src="app.js"></script>
-</body>
-</html>
+<body><div class="app-shell">
+<aside class="sidebar"><div class="brand"><div class="logo">N</div><div><strong>NOVUS</strong><small>LAUNCHER</small></div></div><nav><button class="nav-item active">⌂ <span>Accueil</span></button><button class="nav-item">◈ <span>Modpack</span></button><button class="nav-item">◉ <span>Serveur</span></button><button class="nav-item">⚙ <span>Paramètres</span></button></nav><div class="account"><div class="avatar">N</div><div><strong>Novus Player</strong><small>Compte local</small></div><button>⋮</button></div></aside>
+<main class="content"><header class="topbar"><div class="crumb">NOVUS <span>/</span> ACCUEIL</div><div class="top-actions"><span class="status-dot"></span><span id="serverStatus">SERVEUR EN LIGNE</span><button class="icon-btn">⌕</button><button class="icon-btn">⚙</button></div></header>
+<section class="hero"><div class="hero-overlay"></div><div class="hero-content"><div class="eyebrow">NOVUS MODDED</div><h1 id="packName">Une nouvelle aventure.</h1><p id="details">Minecraft 1.20.1 <i>•</i> Fabric <i>•</i> Create</p><div class="tags"><span>CREATE</span><span>SURVIE</span><span>INDUSTRIE</span></div><div class="hero-actions"><button id="play" class="play" disabled>▶ <b>JOUER</b></button><button id="install" class="update">INSTALLER / METTRE À JOUR</button></div></div><div class="hero-n">N</div></section>
+<section class="status-panel"><div class="status-head"><div><small>ÉTAT DU JEU</small><strong id="status">Prêt à jouer</strong><span id="phase">Ton environnement Novus est à jour.</span></div><div class="percent" id="percent">0%</div></div><div class="progress"><div id="bar"></div></div></section>
+<section class="cards"><article class="card server"><div class="card-head"><span>◉</span><small>SERVEUR</small><b>EN LIGNE</b></div><h2>Novus Modded</h2><div class="server-info"><span><i></i> En ligne</span><span>— joueurs</span><span>IP à configurer</span></div></article><article class="card"><div class="card-head"><span>◆</span><small>MODPACK</small><b id="packVersion">0.1.0</b></div><h2>Create & Extensions</h2><p>Installation et mises à jour automatiques.</p><div class="mini-progress"><span></span></div></article><article class="card news"><div class="card-head"><span>✦</span><small>ACTUALITÉS</small><b>NOVUS</b></div><h2>Bienvenue sur Novus</h2><p>Découvre un Minecraft transformé avec de nouveaux systèmes, interfaces et aventures.</p><button>VOIR LES ACTUALITÉS →</button></article></section>
+<section class="bottom-grid"><div><small>VERSION DU CLIENT</small><strong>v<span id="version">0.1.0</span></strong></div><div><small>INSTALLATION</small><strong>Automatique</strong></div><div><small>RÉPERTOIRE</small><strong id="gameDir">Chargement…</strong></div></section><footer>© 2026 Novus <span>•</span> Tous les systèmes sont opérationnels</footer></main></div><script src="app.js"></script></body></html>
