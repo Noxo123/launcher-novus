@@ -6,8 +6,12 @@ const { spawn, execFileSync } = require('child_process');
 const { Client } = require('minecraft-launcher-core');
 
 const GAME_DIR = path.join(app.getPath('userData'), 'minecraft');
+const RUNTIME_DIR = path.join(app.getPath('userData'), 'runtime');
+const JAVA_DIR = path.join(RUNTIME_DIR, 'jdk17');
+const JAVA_ZIP = path.join(RUNTIME_DIR, 'jdk17.zip');
 const MANIFEST_PATH = path.join(__dirname, '..', 'modpack', 'manifest.json');
 const FABRIC_INSTALLER_URL = 'https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar';
+const JAVA_DOWNLOAD_URL = 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse';
 let win;
 let gameProcess = null;
 let gameLauncher = null;
@@ -27,7 +31,7 @@ async function download(url, destination, label, expectedSha256) {
     fs.rmSync(destination, { force: true });
   }
   send('status', { text: `Téléchargement : ${label}` });
-  const response = await fetch(url, { redirect: 'follow' });
+  const response = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'Novus-Launcher/1.0' } });
   if (!response.ok) throw new Error(`${label} : téléchargement impossible (${response.status})`);
   const buffer = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(destination, buffer);
@@ -40,34 +44,81 @@ async function download(url, destination, label, expectedSha256) {
 function fabricVersionId(manifest) { return `fabric-loader-${manifest.fabricLoader}-${manifest.minecraft}`; }
 function fabricVersionJson(manifest) { const id = fabricVersionId(manifest); return path.join(GAME_DIR, 'versions', id, `${id}.json`); }
 
+function javaVersion(java) {
+  try {
+    const result = execFileSync(java, ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return `${result || ''}`;
+  } catch (e) {
+    return `${e.stderr || ''}${e.stdout || ''}`;
+  }
+}
+function isJava17(java) { return /version\s+"17(?:[.\-]|$)/.test(javaVersion(java)); }
+
 function findJava() {
   const candidates = [];
+  const bundled = path.join(JAVA_DIR, 'bin', 'java.exe');
   if (process.env.JAVA_HOME) candidates.push(path.join(process.env.JAVA_HOME, 'bin', 'java.exe'));
   if (process.env.ProgramFiles) {
     candidates.push(path.join(process.env.ProgramFiles, 'Java', 'jdk-17', 'bin', 'java.exe'));
     candidates.push(path.join(process.env.ProgramFiles, 'Eclipse Adoptium', 'jdk-17', 'bin', 'java.exe'));
   }
-  if (process.env['ProgramFiles(x86)']) {
-    candidates.push(path.join(process.env['ProgramFiles(x86)'], 'Java', 'jdk-17', 'bin', 'java.exe'));
-  }
+  if (process.env['ProgramFiles(x86)']) candidates.push(path.join(process.env['ProgramFiles(x86)'], 'Java', 'jdk-17', 'bin', 'java.exe'));
   candidates.push('java.exe');
-
+  candidates.push(bundled);
   for (const candidate of candidates) {
-    try {
-      const result = execFileSync(candidate, ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const text = `${result || ''}`;
-      if (/version\s+"17(?:[.\-]|$)/.test(text)) return candidate;
-    } catch (e) {
-      const text = `${e.stderr || ''}${e.stdout || ''}`;
-      if (/version\s+"17(?:[.\-]|$)/.test(text)) return candidate;
+    try { if (isJava17(candidate)) return candidate; } catch (_) {}
+  }
+  return null;
+}
+
+async function installJava17() {
+  const existing = findJava();
+  if (existing) {
+    send('status', { text: 'Java 17 x64 détecté.' });
+    return existing;
+  }
+  if (process.platform !== 'win32') throw new Error('Novus installe automatiquement Java 17 sur Windows. Sur cette plateforme, Java 17 doit être installé manuellement.');
+
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+  send('status', { text: 'Java 17 x64 absent : téléchargement automatique...' });
+  send('progress', { percent: 8, phase: 'Téléchargement de Java 17 x64' });
+  await download(JAVA_DOWNLOAD_URL, JAVA_ZIP, 'Java 17 x64');
+
+  if (fs.existsSync(JAVA_DIR)) fs.rmSync(JAVA_DIR, { recursive: true, force: true });
+  fs.mkdirSync(JAVA_DIR, { recursive: true });
+  send('status', { text: 'Installation automatique de Java 17 x64...' });
+  await new Promise((resolve, reject) => {
+    const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Expand-Archive -LiteralPath '${JAVA_ZIP.replace(/'/g, "''")}' -DestinationPath '${JAVA_DIR.replace(/'/g, "''")}' -Force`], { windowsHide: true });
+    let stderr = '';
+    ps.stderr.on('data', d => stderr += d.toString());
+    ps.on('error', reject);
+    ps.on('close', code => code === 0 ? resolve() : reject(new Error(`Extraction de Java échouée (${code}) ${stderr}`)));
+  });
+
+  // Adoptium archives contain a single top-level directory. Find java.exe
+  // instead of assuming its exact versioned folder name.
+  let java = null;
+  function walk(dir, depth = 0) {
+    if (depth > 4 || java) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.toLowerCase() === 'java.exe' && full.toLowerCase().endsWith(`${path.sep}bin${path.sep}java.exe`)) { java = full; return; }
+      if (entry.isDirectory()) walk(full, depth + 1);
     }
   }
-  throw new Error('Java 17 x64 est requis pour Minecraft 1.20.1. Installe Java 17 x64 puis redémarre Novus.');
+  walk(JAVA_DIR);
+  if (!java || !isJava17(java)) throw new Error('Java 17 x64 a été téléchargé mais n’a pas pu être initialisé.');
+  try { fs.rmSync(JAVA_ZIP, { force: true }); } catch (_) {}
+  send('progress', { percent: 15, phase: 'Java 17 x64 installé' });
+  send('status', { text: 'Java 17 x64 installé automatiquement.' });
+  return java;
 }
 
 async function installFabric(manifest) {
   const installerPath = path.join(GAME_DIR, 'fabric-installer.jar');
-  const java = findJava();
+  const java = await installJava17();
   await download(FABRIC_INSTALLER_URL, installerPath, 'Fabric Installer');
   send('status', { text: `Installation de Fabric Loader ${manifest.fabricLoader}...` });
   await new Promise((resolve, reject) => {
@@ -135,7 +186,7 @@ async function launch(server) {
   await verifyMods(manifest);
   if (launchInProgress || gameProcess) throw new Error('Minecraft est déjà en cours de lancement ou déjà lancé.');
 
-  const java = findJava();
+  const java = await installJava17();
   send('game-log', { text: `[NOVUS] Java sélectionné : ${java}` });
   send('game-log', { text: `[NOVUS] Fabric : ${versionId}` });
   send('game-log', { text: `[NOVUS] Version JSON : ${versionJson}` });
@@ -144,7 +195,6 @@ async function launch(server) {
   launchInProgress = true;
   const launcher = new Client();
   gameLauncher = launcher;
-
   launcher.on('debug', m => send('game-log', { text: `[MCLC] ${String(m)}` }));
   launcher.on('data', m => send('game-log', { text: String(m) }));
   launcher.on('arguments', args => send('game-log', { text: `Minecraft arguments: ${Array.isArray(args) ? args.join(' ') : String(args)}` }));
@@ -164,23 +214,16 @@ async function launch(server) {
     version: { number: manifest.minecraft, type: 'release', custom: versionId },
     memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
     javaPath: java,
-    // Let MCLC resolve the Fabric version from root/versions/<custom>.
-    // Supplying versionJson/directory overrides here can make MCLC treat the
-    // inherited Fabric profile as a standalone version and produce no process.
     overrides: { gameDirectory: GAME_DIR, cwd: GAME_DIR, detached: false }
   };
   if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
-
   send('progress', { percent: 100, phase: 'Lancement de Novus...' });
   send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
-
   try {
     const processHandle = await launcher.launch(options);
     if (!processHandle || typeof processHandle.on !== 'function') {
-      gameProcess = null;
-      gameLauncher = null;
-      launchInProgress = false;
-      throw new Error('MCLC n’a créé aucun processus Minecraft. Vérifie le log [MCLC] ci-dessus : Java, le JSON Fabric, le jar Minecraft et les bibliothèques doivent être présents.');
+      gameProcess = null; gameLauncher = null; launchInProgress = false;
+      throw new Error('MCLC n’a créé aucun processus Minecraft. Vérifie les logs [MCLC].');
     }
     gameProcess = processHandle;
     launchInProgress = false;
@@ -190,9 +233,7 @@ async function launch(server) {
     send('status', { text: 'Minecraft est lancé.' });
     return { ok: true, pid: processHandle.pid || null };
   } catch (error) {
-    gameProcess = null;
-    gameLauncher = null;
-    launchInProgress = false;
+    gameProcess = null; gameLauncher = null; launchInProgress = false;
     send('game-error', { message: error?.stack || error?.message || String(error) });
     throw error;
   }
