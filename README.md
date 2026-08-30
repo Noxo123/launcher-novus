@@ -14,8 +14,6 @@ V1 du launcher Minecraft moddé de Novus.
 - Lancement de l'instance avec le moteur XMCL
 - Build Windows NSIS
 
-Les bibliothèques XMCL `@xmcl/core` et `@xmcl/installer` sont utilisées pour l'installation et le lancement de Minecraft. `@xmcl/installer` fournit notamment l'installation complète de Minecraft et de Fabric. citeturn1search0turn6search1
-
 ## Installation développeur
 
 Prérequis : Node.js 20+ et Java accessible avec `java` dans le PATH.
