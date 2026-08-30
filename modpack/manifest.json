@@ -1,9 +1,9 @@
 {
   "name": "Novus Modded",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minecraft": "1.20.1",
   "loader": "Fabric",
-  "fabricLoader": "0.16.14",
+  "fabricLoader": "0.17.2",
   "playerName": "NovusPlayer",
   "memoryMin": "2G",
   "memoryMax": "4G",
