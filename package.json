@@ -1,0 +1,36 @@
+{
+  "name": "novus-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Novus Launcher - Minecraft modpack launcher V1",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder --win nsis"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xmcl/core": "2.16.1",
+    "@xmcl/installer": "6.3.2"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "fr.novus.launcher",
+    "productName": "Novus Launcher",
+    "files": [
+      "src/**/*",
+      "modpack/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "Novus-Launcher-${version}-Setup.exe"
+    }
+  }
+}
