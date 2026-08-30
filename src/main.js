@@ -10,6 +10,7 @@ const MANIFEST_PATH = path.join(__dirname, '..', 'modpack', 'manifest.json');
 const FABRIC_INSTALLER_URL = 'https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar';
 let win;
 let gameProcess = null;
+let launchInProgress = false;
 
 function send(event, payload) { if (win && !win.isDestroyed()) win.webContents.send(event, payload); }
 function createWindow() {
@@ -102,32 +103,60 @@ async function install() {
   send('installed', { installed: true, gameDir: GAME_DIR });
   return { ok: true, gameDir: GAME_DIR };
 }
+
 async function launch(server) {
   const manifest = readManifest();
   if (!fs.existsSync(path.join(GAME_DIR, 'novus-manifest.json'))) throw new Error('Le modpack n’est pas installé.');
   if (!fs.existsSync(fabricVersionJson(manifest))) throw new Error('Fabric est incomplet. Fais une mise à jour.');
   await verifyMods(manifest);
-  if (gameProcess) throw new Error('Minecraft est déjà lancé.');
-  const launcher = new Client();
-  const options = {
-    authorization: offlineAuth(manifest.playerName || 'NovusPlayer'),
-    root: GAME_DIR,
-    version: { number: fabricVersionId(manifest), type: 'custom' },
-    memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
-    javaPath: javaCommand(),
-    overrides: { detached: false }
-  };
-  if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
-  send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
-  gameProcess = launcher.launch(options);
-  gameProcess.on('close', code => { gameProcess = null; send('game-exit', { code }); });
-  gameProcess.on('error', e => { gameProcess = null; send('game-error', { message: e.message || String(e) }); });
-  launcher.on('debug', m => send('game-log', { text: String(m) }));
-  launcher.on('data', m => send('game-log', { text: String(m) }));
-  launcher.on('error', e => send('game-error', { message: e.message || String(e) }));
-  return { ok: true };
+
+  // Prevent two rapid clicks / simultaneous IPC calls from starting two clients.
+  if (launchInProgress || gameProcess) throw new Error('Minecraft est déjà en cours de lancement ou déjà lancé.');
+  launchInProgress = true;
+
+  try {
+    const launcher = new Client();
+    const options = {
+      authorization: offlineAuth(manifest.playerName || 'NovusPlayer'),
+      root: GAME_DIR,
+      version: { number: fabricVersionId(manifest), type: 'custom' },
+      memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
+      javaPath: javaCommand(),
+      overrides: { detached: false }
+    };
+    if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
+
+    send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
+    const processHandle = launcher.launch(options);
+    gameProcess = processHandle;
+    send('game-started', { started: true });
+
+    processHandle.on('close', code => {
+      gameProcess = null;
+      launchInProgress = false;
+      send('game-exit', { code });
+    });
+    processHandle.on('error', e => {
+      gameProcess = null;
+      launchInProgress = false;
+      send('game-error', { message: e.message || String(e) });
+    });
+    launcher.on('debug', m => send('game-log', { text: String(m) }));
+    launcher.on('data', m => send('game-log', { text: String(m) }));
+    launcher.on('error', e => send('game-error', { message: e.message || String(e) }));
+
+    return { ok: true };
+  } catch (error) {
+    gameProcess = null;
+    launchInProgress = false;
+    throw error;
+  }
 }
-ipcMain.handle('get-info', () => { const m = readManifest(); return { name: m.name, version: m.version, minecraft: m.minecraft, loader: m.loader, fabricLoader: m.fabricLoader, gameDir: GAME_DIR, installed: fs.existsSync(path.join(GAME_DIR, 'novus-manifest.json')) && fs.existsSync(fabricVersionJson(m)), mods: m.mods || [], server: m.server || {} }; });
+
+ipcMain.handle('get-info', () => {
+  const m = readManifest();
+  return { name: m.name, version: m.version, minecraft: m.minecraft, loader: m.loader, fabricLoader: m.fabricLoader, gameDir: GAME_DIR, installed: fs.existsSync(path.join(GAME_DIR, 'novus-manifest.json')) && fs.existsSync(fabricVersionJson(m)), mods: m.mods || [], server: m.server || {} };
+});
 ipcMain.handle('install', async () => { try { return await install(); } catch (e) { send('error', { message: e.stack || e.message }); return { ok: false, error: e.message }; } });
 ipcMain.handle('launch', async (_event, server) => { try { return await launch(server); } catch (e) { send('error', { message: e.stack || e.message }); return { ok: false, error: e.message }; } });
 ipcMain.handle('open-game-dir', () => { shell.openPath(GAME_DIR); return GAME_DIR; });
