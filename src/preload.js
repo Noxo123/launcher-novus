@@ -1,9 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
-
 contextBridge.exposeInMainWorld('novus', {
   getInfo: () => ipcRenderer.invoke('get-info'),
   getModpacks: () => ipcRenderer.invoke('get-modpacks'),
   selectModpack: pack => ipcRenderer.invoke('select-modpack', pack),
+  addLocalMod: () => ipcRenderer.invoke('add-local-mod'),
+  securityAudit: () => ipcRenderer.invoke('security-audit'),
   install: () => ipcRenderer.invoke('install'),
   launch: server => ipcRenderer.invoke('launch', server || null),
   openGameDir: () => ipcRenderer.invoke('open-game-dir'),
