@@ -113,9 +113,7 @@ async function install() {
     versionId: `fabric-loader-${loader.version}-${manifest.minecraft}`
   });
 
-  for (const mod of manifest.mods || []) {
-    await installModrinthMod(mod, manifest);
-  }
+  for (const mod of manifest.mods || []) await installModrinthMod(mod, manifest);
 
   for (const file of manifest.files || []) {
     const target = path.join(GAME_DIR, file.path);
@@ -126,11 +124,7 @@ async function install() {
     await download(file.url, target, file.path, file.sha256);
   }
 
-  const installed = {
-    ...manifest,
-    installedLoader: loader.version,
-    installedVersionId: versionId
-  };
+  const installed = { ...manifest, installedLoader: loader.version, installedVersionId: versionId };
   fs.writeFileSync(path.join(GAME_DIR, 'novus-manifest.json'), JSON.stringify(installed, null, 2));
   send('status', { text: 'Installation terminée.' });
   send('installed', { installed: true, gameDir: GAME_DIR });
@@ -138,28 +132,24 @@ async function install() {
 }
 
 async function launch() {
-  const manifest = readManifest();
   const installedFile = path.join(GAME_DIR, 'novus-manifest.json');
   if (!fs.existsSync(installedFile)) throw new Error('Le modpack n’est pas installé.');
   const installed = JSON.parse(fs.readFileSync(installedFile, 'utf8'));
   const { launch } = await import('@xmcl/core');
+  const { offline, getOfflineUUID } = await import('@xmcl/user');
 
-  send('status', 'Lancement de Minecraft...');
-  // V1 is for local testing. Public multiplayer will use Microsoft authentication in V1.1.
+  send('status', { text: 'Lancement de Minecraft...' });
+  const username = 'NovusPlayer';
+  const auth = offline(username, getOfflineUUID(username));
   const proc = await launch({
     gamePath: GAME_DIR,
     javaPath: 'java',
     version: installed.installedVersionId,
+    accessToken: auth.accessToken,
+    gameProfile: auth.selectedProfile,
+    userType: 'legacy',
     minMemory: 2,
     maxMemory: 6,
-    authorization: {
-      accessToken: '0',
-      clientToken: 'novus-local',
-      uuid: '00000000-0000-0000-0000-000000000000',
-      name: 'NovusPlayer',
-      userProperties: {},
-      meta: { type: 'offline', demo: false }
-    },
     extraExecOption: { detached: true }
   });
 
@@ -171,14 +161,13 @@ async function launch() {
 
 ipcMain.handle('get-info', () => {
   const manifest = readManifest();
-  const installedPath = path.join(GAME_DIR, 'novus-manifest.json');
   return {
     name: manifest.name,
     version: manifest.version,
     minecraft: manifest.minecraft,
     loader: manifest.loader,
     gameDir: GAME_DIR,
-    installed: fs.existsSync(installedPath)
+    installed: fs.existsSync(path.join(GAME_DIR, 'novus-manifest.json'))
   };
 });
 
