@@ -50,7 +50,7 @@ async function installFabric(manifest) {
     let stderr = '';
     child.stderr.on('data', d => stderr += d.toString());
     child.stdout.on('data', d => { const text = d.toString().trim(); if (text) send('status', { text: text.split(/\r?\n/).filter(Boolean).pop() }); });
-    child.on('error', e => reject(new Error(`Java 17 est introuvable. ${e.message}`)));
+    child.on('error', e => reject(new Error(`Java est introuvable. Installe Java 17 x64 puis redémarre Novus. ${e.message}`)));
     child.on('close', code => code === 0 ? resolve() : reject(new Error(`Installation Fabric échouée (${code}). ${stderr.trim()}`)));
   });
   fs.rmSync(installerPath, { force: true });
@@ -103,66 +103,60 @@ async function install() {
 
 async function launch(server) {
   const manifest = readManifest();
+  const versionId = fabricVersionId(manifest);
+  const versionJson = fabricVersionJson(manifest);
   if (!fs.existsSync(path.join(GAME_DIR, 'novus-manifest.json'))) throw new Error('Le modpack n’est pas installé.');
-  if (!fs.existsSync(fabricVersionJson(manifest))) throw new Error('Fabric est incomplet. Fais une mise à jour.');
+  if (!fs.existsSync(versionJson)) throw new Error(`Fabric est incomplet : ${versionId}. Fais une installation/mise à jour.`);
   await verifyMods(manifest);
-
   if (launchInProgress || gameProcess) throw new Error('Minecraft est déjà en cours de lancement ou déjà lancé.');
-  launchInProgress = true;
 
+  launchInProgress = true;
   const launcher = new Client();
   gameLauncher = launcher;
+
+  launcher.on('debug', m => send('game-log', { text: String(m) }));
+  launcher.on('data', m => send('game-log', { text: String(m) }));
+  launcher.on('arguments', args => send('game-log', { text: `Minecraft arguments: ${Array.isArray(args) ? args.join(' ') : String(args)}` }));
+  launcher.on('download-status', p => send('game-progress', p));
+  launcher.on('error', e => send('game-error', { message: e?.message || String(e) }));
+  launcher.on('close', code => {
+    gameProcess = null;
+    gameLauncher = null;
+    launchInProgress = false;
+    send('game-exit', { code });
+    send('status', { text: code === 0 ? 'Minecraft est fermé.' : `Minecraft s’est arrêté avec le code ${code}.` });
+  });
+
   const options = {
     authorization: offlineAuth(manifest.playerName || 'NovusPlayer'),
     root: GAME_DIR,
-    version: { number: fabricVersionId(manifest), type: 'custom' },
+    // MCLC 3.18.2 expects the vanilla Minecraft version in `number` and
+    // the Fabric profile id in `custom`. `type: custom` is not used by MCLC.
+    version: { number: manifest.minecraft, custom: versionId },
     memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
     javaPath: javaCommand(),
-    overrides: { detached: false }
+    overrides: {
+      detached: false,
+      versionJson: versionJson,
+      gameDirectory: GAME_DIR,
+      cwd: GAME_DIR
+    }
   };
   if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
 
   send('progress', { percent: 100, phase: 'Lancement de Novus...' });
   send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
 
-  // minecraft-launcher-core 3.18.x exposes events on Client, while launch()
-  // is async and resolves to the actual ChildProcess. The old code stored the
-  // Promise returned by launch() as gameProcess, which caused the launcher/UI
-  // to treat a Promise as a process and led to errors such as
-  // "processHandle.on is not a function".
-  launcher.on('debug', m => send('game-log', { text: String(m) }));
-  launcher.on('data', m => send('game-log', { text: String(m) }));
-  launcher.on('arguments', args => send('game-log', { text: `Minecraft arguments: ${args.join(' ')}` }));
-  launcher.on('error', e => {
-    gameProcess = null;
-    gameLauncher = null;
-    launchInProgress = false;
-    send('game-error', { message: e?.message || String(e) });
-  });
-  launcher.on('close', code => {
-    gameProcess = null;
-    gameLauncher = null;
-    launchInProgress = false;
-    send('game-exit', { code });
-  });
-
   try {
+    // minecraft-launcher-core 3.18.2 returns null when Java or launch
+    // preparation fails, and a ChildProcess when Minecraft actually starts.
+    // Do not attach `.on()` until after the promise has resolved.
     const processHandle = await launcher.launch(options);
-
-    if (!processHandle) {
+    if (!processHandle || typeof processHandle.on !== 'function') {
       gameProcess = null;
       gameLauncher = null;
       launchInProgress = false;
-      throw new Error('Minecraft n’a pas pu être lancé. Vérifie Java et les logs Novus.');
-    }
-
-    // IMPORTANT: processHandle is the real ChildProcess. Never call .on()
-    // on the Promise returned by launcher.launch().
-    if (typeof processHandle.on !== 'function') {
-      gameProcess = null;
-      gameLauncher = null;
-      launchInProgress = false;
-      throw new Error(`Le processus Minecraft retourné est invalide (${typeof processHandle}).`);
+      throw new Error('Minecraft n’a pas pu être lancé. Consulte les logs Novus : Java 17 x64, Fabric et les fichiers du modpack doivent être valides.');
     }
 
     gameProcess = processHandle;
