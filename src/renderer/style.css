@@ -1,0 +1,25 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, Segoe UI, sans-serif; color: #f4f7fb; background: #080a0f; }
+.shell { min-height: 100vh; padding: 34px 52px; background: radial-gradient(circle at 75% 20%, #182b3e 0, transparent 38%), #080a0f; }
+header, .row, footer { display: flex; align-items: center; justify-content: space-between; }
+.brand { font-size: 22px; font-weight: 900; letter-spacing: .22em; }
+.version { color: #8c9aaa; font-size: 13px; }
+.hero { margin-top: 90px; display: flex; justify-content: space-between; align-items: center; }
+.eyebrow { color: #7f91a4; font-size: 12px; font-weight: 800; letter-spacing: .18em; }
+h1 { font-size: 54px; margin: 12px 0; }
+#details { color: #9aa8b7; font-size: 17px; }
+.status-dot { width: 14px; height: 14px; border-radius: 50%; background: #54d68b; box-shadow: 0 0 22px #54d68b; margin-right: 12%; }
+.status-dot.error { background: #ff5f67; box-shadow: 0 0 22px #ff5f67; }
+.card { margin-top: 54px; padding: 22px; border: 1px solid #202a36; border-radius: 16px; background: rgba(14,18,25,.82); }
+.row { font-size: 14px; color: #d7e0e9; }
+#percent { color: #7f91a4; }
+.progress { height: 8px; background: #1b232d; border-radius: 99px; margin-top: 16px; overflow: hidden; }
+#bar { height: 100%; width: 0; background: #69aefc; border-radius: inherit; transition: width .2s ease; }
+.phase { margin-top: 12px; color: #758496; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.actions { display: flex; gap: 14px; margin-top: 22px; }
+button { border: 0; border-radius: 10px; padding: 15px 20px; font-weight: 800; cursor: pointer; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.primary { min-width: 190px; color: #071018; background: #dcecff; }
+.secondary { color: #e8eef6; background: #17202b; border: 1px solid #273444; }
+footer { margin-top: 70px; color: #5f6d7c; font-size: 11px; gap: 20px; }
+#gameDir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
