@@ -3,11 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
-const MINECRAFT_VERSION = '1.21.1';
-const FABRIC_LOADER = '0.17.2';
 const GAME_DIR = path.join(app.getPath('userData'), 'minecraft');
 const MANIFEST_PATH = path.join(__dirname, '..', 'modpack', 'manifest.json');
-
 let win;
 
 function send(event, payload) {
@@ -45,14 +42,47 @@ function sha256(file) {
   });
 }
 
-async function download(url, destination, label) {
+async function download(url, destination, label, expectedSha256) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
+  if (fs.existsSync(destination) && expectedSha256) {
+    const existing = await sha256(destination);
+    if (existing.toLowerCase() === expectedSha256.toLowerCase()) return;
+  }
+
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Téléchargement impossible (${response.status}): ${url}`);
   const total = Number(response.headers.get('content-length') || 0);
   const buffer = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(destination, buffer);
+
+  if (expectedSha256) {
+    const actual = await sha256(destination);
+    if (actual.toLowerCase() !== expectedSha256.toLowerCase()) {
+      fs.rmSync(destination, { force: true });
+      throw new Error(`Hash SHA-256 invalide pour ${label}`);
+    }
+  }
   send('progress', { phase: label, current: buffer.length, total, percent: total ? Math.round(buffer.length / total * 100) : 100 });
+}
+
+async function installModrinthMod(mod, manifest) {
+  const url = new URL(`https://api.modrinth.com/v2/project/${encodeURIComponent(mod.project)}/version`);
+  url.searchParams.set('loaders', JSON.stringify(['fabric']));
+  url.searchParams.set('game_versions', JSON.stringify([manifest.minecraft]));
+  url.searchParams.set('version_type', 'release');
+
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Modrinth ne propose pas de version compatible pour ${mod.name} (${response.status})`);
+  const versions = await response.json();
+  if (!Array.isArray(versions) || versions.length === 0) throw new Error(`Aucune version compatible de ${mod.name}`);
+
+  const version = versions[0];
+  const file = version.files.find(f => f.primary) || version.files[0];
+  if (!file) throw new Error(`Fichier introuvable pour ${mod.name}`);
+
+  const safeName = path.basename(file.filename);
+  await download(file.url, path.join(GAME_DIR, 'mods', safeName), mod.name, file.hashes?.sha256);
+  send('status', { text: `${mod.name} ${version.version_number} installé.` });
 }
 
 async function install() {
@@ -60,11 +90,9 @@ async function install() {
   fs.mkdirSync(GAME_DIR, { recursive: true });
   send('status', { text: `Installation de Minecraft ${manifest.minecraft}...` });
 
-  // Dynamic import keeps Electron's CommonJS main process compatible with the ESM XMCL packages.
   const { Version } = await import('@xmcl/core');
   const installer = await import('@xmcl/installer');
-  const minecraft = GAME_DIR;
-  const resolved = await Version.parse(minecraft, manifest.minecraft);
+  const resolved = await Version.parse(GAME_DIR, manifest.minecraft);
 
   await installer.completeInstallation(resolved, {
     tracker: event => {
@@ -76,51 +104,63 @@ async function install() {
     }
   });
 
-  send('status', { text: `Installation de Fabric ${manifest.fabric.loader}...` });
-  await installer.installFabric({ minecraft: manifest.minecraft, loader: manifest.fabric.loader }, minecraft);
+  send('status', { text: 'Installation du loader Fabric...' });
+  const loaders = await installer.getLoaderArtifactListFor(manifest.minecraft, {});
+  if (!loaders.length) throw new Error(`Aucun loader Fabric trouvé pour ${manifest.minecraft}`);
+  const loader = loaders[0];
+  const versionId = await installer.installFabricByLoaderArtifact(loader, GAME_DIR, {
+    side: 'client',
+    versionId: `fabric-loader-${loader.version}-${manifest.minecraft}`
+  });
 
-  const files = manifest.files || [];
-  for (const file of files) {
-    const target = path.join(GAME_DIR, file.path);
-    let valid = false;
-    if (fs.existsSync(target) && file.sha256) {
-      valid = (await sha256(target)).toLowerCase() === file.sha256.toLowerCase();
-    }
-    if (!valid) await download(file.url, target, file.path);
+  for (const mod of manifest.mods || []) {
+    await installModrinthMod(mod, manifest);
   }
 
-  fs.writeFileSync(path.join(GAME_DIR, 'novus-manifest.json'), JSON.stringify(manifest, null, 2));
+  for (const file of manifest.files || []) {
+    const target = path.join(GAME_DIR, file.path);
+    const normalized = path.normalize(target);
+    if (!normalized.startsWith(path.normalize(GAME_DIR + path.sep))) {
+      throw new Error(`Chemin de fichier interdit dans le manifest: ${file.path}`);
+    }
+    await download(file.url, target, file.path, file.sha256);
+  }
+
+  const installed = {
+    ...manifest,
+    installedLoader: loader.version,
+    installedVersionId: versionId
+  };
+  fs.writeFileSync(path.join(GAME_DIR, 'novus-manifest.json'), JSON.stringify(installed, null, 2));
   send('status', { text: 'Installation terminée.' });
   send('installed', { installed: true, gameDir: GAME_DIR });
-  return { ok: true, gameDir: GAME_DIR };
+  return { ok: true, gameDir: GAME_DIR, versionId };
 }
 
 async function launch() {
   const manifest = readManifest();
-  const { launch, Version } = await import('@xmcl/core');
-  if (!fs.existsSync(GAME_DIR)) throw new Error('Le modpack n’est pas installé.');
+  const installedFile = path.join(GAME_DIR, 'novus-manifest.json');
+  if (!fs.existsSync(installedFile)) throw new Error('Le modpack n’est pas installé.');
+  const installed = JSON.parse(fs.readFileSync(installedFile, 'utf8'));
+  const { launch } = await import('@xmcl/core');
 
-  // V1 uses an offline local profile for local testing only.
-  // Microsoft account authentication will be added in V1.1 before public multiplayer use.
-  const username = 'NovusPlayer';
-  const resolved = await Version.parse(GAME_DIR, manifest.minecraft);
-  send('status', { text: 'Lancement de Minecraft...' });
-
+  send('status', 'Lancement de Minecraft...');
+  // V1 is for local testing. Public multiplayer will use Microsoft authentication in V1.1.
   const proc = await launch({
     gamePath: GAME_DIR,
     javaPath: 'java',
-    version: resolved.id,
+    version: installed.installedVersionId,
     minMemory: 2,
     maxMemory: 6,
     authorization: {
       accessToken: '0',
       clientToken: 'novus-local',
       uuid: '00000000-0000-0000-0000-000000000000',
-      name: username,
+      name: 'NovusPlayer',
       userProperties: {},
       meta: { type: 'offline', demo: false }
     },
-    detached: true
+    extraExecOption: { detached: true }
   });
 
   proc.on('error', error => send('game-error', { message: error.message }));
@@ -131,13 +171,14 @@ async function launch() {
 
 ipcMain.handle('get-info', () => {
   const manifest = readManifest();
+  const installedPath = path.join(GAME_DIR, 'novus-manifest.json');
   return {
     name: manifest.name,
     version: manifest.version,
     minecraft: manifest.minecraft,
     loader: manifest.loader,
     gameDir: GAME_DIR,
-    installed: fs.existsSync(path.join(GAME_DIR, 'novus-manifest.json'))
+    installed: fs.existsSync(installedPath)
   };
 });
 
