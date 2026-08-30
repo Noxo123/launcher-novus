@@ -2,9 +2,12 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
+const { Client, Authenticator } = require('minecraft-launcher-core');
 
 const GAME_DIR = path.join(app.getPath('userData'), 'minecraft');
 const MANIFEST_PATH = path.join(__dirname, '..', 'modpack', 'manifest.json');
+const FABRIC_INSTALLER_URL = 'https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar';
 let win;
 
 function send(event, payload) {
@@ -44,6 +47,7 @@ function sha256(file) {
 
 async function download(url, destination, label, expectedSha256) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
+
   if (fs.existsSync(destination) && expectedSha256) {
     const existing = await sha256(destination);
     if (existing.toLowerCase() === expectedSha256.toLowerCase()) return;
@@ -51,6 +55,7 @@ async function download(url, destination, label, expectedSha256) {
 
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Téléchargement impossible (${response.status}): ${url}`);
+
   const total = Number(response.headers.get('content-length') || 0);
   const buffer = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(destination, buffer);
@@ -62,7 +67,43 @@ async function download(url, destination, label, expectedSha256) {
       throw new Error(`Hash SHA-256 invalide pour ${label}`);
     }
   }
-  send('progress', { phase: label, current: buffer.length, total, percent: total ? Math.round(buffer.length / total * 100) : 100 });
+
+  send('progress', {
+    phase: label,
+    current: buffer.length,
+    total,
+    percent: total ? Math.round(buffer.length / total * 100) : 100
+  });
+}
+
+async function installFabric(manifest) {
+  const installerPath = path.join(GAME_DIR, 'fabric-installer.jar');
+  send('status', { text: 'Téléchargement de Fabric...' });
+  await download(FABRIC_INSTALLER_URL, installerPath, 'Fabric');
+
+  send('status', { text: 'Installation de Fabric...' });
+
+  await new Promise((resolve, reject) => {
+    const child = spawn('java', [
+      '-jar', installerPath,
+      'client',
+      '-dir', GAME_DIR,
+      '-mcversion', manifest.minecraft,
+      '-loader', manifest.fabricLoader || '0.16.14',
+      '-noprofile'
+    ], { windowsHide: true });
+
+    let stderr = '';
+    child.stderr.on('data', data => { stderr += data.toString(); });
+    child.stdout.on('data', data => send('status', { text: data.toString().trim() }));
+    child.on('error', error => reject(new Error(`Java est introuvable. Installe Java 17 et ajoute-le au PATH. ${error.message}`)));
+    child.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`Installation Fabric échouée (code ${code}). ${stderr}`));
+    });
+  });
+
+  fs.rmSync(installerPath, { force: true });
 }
 
 async function installModrinthMod(mod, manifest) {
@@ -73,6 +114,7 @@ async function installModrinthMod(mod, manifest) {
 
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Modrinth ne propose pas de version compatible pour ${mod.name} (${response.status})`);
+
   const versions = await response.json();
   if (!Array.isArray(versions) || versions.length === 0) throw new Error(`Aucune version compatible de ${mod.name}`);
 
@@ -80,40 +122,77 @@ async function installModrinthMod(mod, manifest) {
   const file = version.files.find(f => f.primary) || version.files[0];
   if (!file) throw new Error(`Fichier introuvable pour ${mod.name}`);
 
-  const safeName = path.basename(file.filename);
-  await download(file.url, path.join(GAME_DIR, 'mods', safeName), mod.name, file.hashes?.sha256);
+  await download(
+    file.url,
+    path.join(GAME_DIR, 'mods', path.basename(file.filename)),
+    mod.name,
+    file.hashes?.sha256
+  );
+
   send('status', { text: `${mod.name} ${version.version_number} installé.` });
 }
 
 async function install() {
   const manifest = readManifest();
   fs.mkdirSync(GAME_DIR, { recursive: true });
+
   send('status', { text: `Installation de Minecraft ${manifest.minecraft}...` });
 
-  const { Version } = await import('@xmcl/core');
-  const installer = await import('@xmcl/installer');
-  const resolved = await Version.parse(GAME_DIR, manifest.minecraft);
+  // MCLC downloads the vanilla client, libraries, assets and natives automatically.
+  const launcher = new Client();
+  const auth = Authenticator.offline('NovusPlayer');
 
-  await installer.completeInstallation(resolved, {
-    tracker: event => {
-      const phase = event.phase || 'minecraft';
-      const downloadInfo = event.payload && event.payload.download;
-      send('progress', downloadInfo
-        ? { phase, current: downloadInfo.progress, total: downloadInfo.total, percent: downloadInfo.total ? Math.round(downloadInfo.progress / downloadInfo.total * 100) : 0 }
-        : { phase, current: 0, total: 0, percent: 0 });
-    }
+  await new Promise((resolve, reject) => {
+    const client = launcher.launch({
+      authorization: auth,
+      root: GAME_DIR,
+      version: { number: manifest.minecraft, type: 'release' },
+      memory: { max: '6G', min: '2G' },
+      overrides: { detached: true }
+    });
+
+    let finished = false;
+    const fail = error => {
+      if (!finished) {
+        finished = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+
+    launcher.on('debug', message => send('status', { text: String(message) }));
+    launcher.on('download', message => send('status', { text: `Téléchargement : ${message}` }));
+    launcher.on('download-status', data => {
+      if (data) send('progress', {
+        phase: 'Minecraft',
+        current: data.current || data.progress || 0,
+        total: data.total || 0,
+        percent: data.total ? Math.round((data.current || data.progress || 0) / data.total * 100) : 0
+      });
+    });
+    launcher.on('close', () => {
+      if (!finished) {
+        finished = true;
+        resolve();
+      }
+    });
+    launcher.on('error', fail);
+
+    // MCLC launches the game immediately. We only use it here to populate the vanilla files.
+    // Stop the temporary process once the required files are downloaded.
+    setTimeout(() => {
+      if (client && client.kill) client.kill();
+      if (!finished) {
+        finished = true;
+        resolve();
+      }
+    }, 1500);
   });
 
-  send('status', { text: 'Installation du loader Fabric...' });
-  const loaders = await installer.getLoaderArtifactListFor(manifest.minecraft, {});
-  if (!loaders.length) throw new Error(`Aucun loader Fabric trouvé pour ${manifest.minecraft}`);
-  const loader = loaders[0];
-  const versionId = await installer.installFabricByLoaderArtifact(loader, GAME_DIR, {
-    side: 'client',
-    versionId: `fabric-loader-${loader.version}-${manifest.minecraft}`
-  });
+  await installFabric(manifest);
 
-  for (const mod of manifest.mods || []) await installModrinthMod(mod, manifest);
+  for (const mod of manifest.mods || []) {
+    await installModrinthMod(mod, manifest);
+  }
 
   for (const file of manifest.files || []) {
     const target = path.join(GAME_DIR, file.path);
@@ -124,37 +203,47 @@ async function install() {
     await download(file.url, target, file.path, file.sha256);
   }
 
-  const installed = { ...manifest, installedLoader: loader.version, installedVersionId: versionId };
+  const installed = {
+    ...manifest,
+    installedAt: new Date().toISOString()
+  };
   fs.writeFileSync(path.join(GAME_DIR, 'novus-manifest.json'), JSON.stringify(installed, null, 2));
+
   send('status', { text: 'Installation terminée.' });
   send('installed', { installed: true, gameDir: GAME_DIR });
-  return { ok: true, gameDir: GAME_DIR, versionId };
+  return { ok: true, gameDir: GAME_DIR };
 }
 
 async function launch() {
   const installedFile = path.join(GAME_DIR, 'novus-manifest.json');
   if (!fs.existsSync(installedFile)) throw new Error('Le modpack n’est pas installé.');
+
   const installed = JSON.parse(fs.readFileSync(installedFile, 'utf8'));
-  const { launch } = await import('@xmcl/core');
-  const { offline, getOfflineUUID } = await import('@xmcl/user');
+  const loaderVersion = installed.fabricLoader || '0.16.14';
+  const customVersion = `fabric-loader-${loaderVersion}-${installed.minecraft}`;
+
+  const launcher = new Client();
+  const auth = Authenticator.offline('NovusPlayer');
 
   send('status', { text: 'Lancement de Minecraft...' });
-  const username = 'NovusPlayer';
-  const auth = offline(username, getOfflineUUID(username));
-  const proc = await launch({
-    gamePath: GAME_DIR,
+
+  const proc = await launcher.launch({
+    authorization: auth,
+    root: GAME_DIR,
+    version: {
+      number: customVersion,
+      type: 'custom'
+    },
+    memory: { max: '6G', min: '2G' },
     javaPath: 'java',
-    version: installed.installedVersionId,
-    accessToken: auth.accessToken,
-    gameProfile: auth.selectedProfile,
-    userType: 'legacy',
-    minMemory: 2,
-    maxMemory: 6,
-    extraExecOption: { detached: true }
+    overrides: { detached: true }
   });
 
-  proc.on('error', error => send('game-error', { message: error.message }));
-  proc.on('exit', code => send('game-exit', { code }));
+  launcher.on('debug', message => send('status', { text: String(message) }));
+  launcher.on('data', message => send('status', { text: String(message) }));
+  launcher.on('close', code => send('game-exit', { code }));
+  launcher.on('error', error => send('game-error', { message: error.message || String(error) }));
+
   send('status', { text: 'Minecraft est lancé.' });
   return { ok: true };
 }
@@ -172,20 +261,24 @@ ipcMain.handle('get-info', () => {
 });
 
 ipcMain.handle('install', async () => {
-  try { return await install(); }
-  catch (error) {
+  try {
+    return await install();
+  } catch (error) {
     send('error', { message: error.stack || error.message });
     return { ok: false, error: error.message };
   }
 });
 
 ipcMain.handle('launch', async () => {
-  try { return await launch(); }
-  catch (error) {
+  try {
+    return await launch();
+  } catch (error) {
     send('error', { message: error.stack || error.message });
     return { ok: false, error: error.message };
   }
 });
 
 app.whenReady().then(createWindow);
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
