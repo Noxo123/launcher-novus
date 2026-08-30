@@ -1,0 +1,59 @@
+name: Build launcher-novus EXE
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          if (Test-Path package-lock.json) {
+            npm ci
+          } else {
+            npm install
+          }
+
+      - name: Build application
+        shell: pwsh
+        run: npm run build
+
+      - name: Package Windows EXE
+        shell: pwsh
+        run: npm run dist:win
+
+      - name: List generated files
+        shell: pwsh
+        run: |
+          Write-Host '=== Generated installers ==='
+          Get-ChildItem -Path . -Recurse -File |
+            Where-Object { $_.Extension -in '.exe', '.msi', '.zip' } |
+            Select-Object FullName, Length
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-novus-windows
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
