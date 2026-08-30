@@ -1,17 +1,20 @@
 {
   "name": "Novus Modded",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minecraft": "1.20.1",
   "loader": "Fabric",
+  "fabricLoader": "0.16.14",
+  "playerName": "NovusPlayer",
+  "memoryMin": "2G",
+  "memoryMax": "4G",
+  "server": {
+    "name": "Novus Modded",
+    "host": "play.novus.fr",
+    "port": 25565
+  },
   "mods": [
-    {
-      "project": "fabric-api",
-      "name": "Fabric API"
-    },
-    {
-      "project": "create-fabric",
-      "name": "Create"
-    }
+    { "project": "fabric-api", "name": "Fabric API" },
+    { "project": "create-fabric", "name": "Create" }
   ],
   "files": []
 }
