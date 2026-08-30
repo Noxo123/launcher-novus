@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { Client } = require('minecraft-launcher-core');
 
 const GAME_DIR = path.join(app.getPath('userData'), 'minecraft');
@@ -39,18 +39,43 @@ async function download(url, destination, label, expectedSha256) {
 }
 function fabricVersionId(manifest) { return `fabric-loader-${manifest.fabricLoader}-${manifest.minecraft}`; }
 function fabricVersionJson(manifest) { const id = fabricVersionId(manifest); return path.join(GAME_DIR, 'versions', id, `${id}.json`); }
-function javaCommand() { return process.platform === 'win32' ? 'java.exe' : 'java'; }
+
+function findJava() {
+  const candidates = [];
+  if (process.env.JAVA_HOME) candidates.push(path.join(process.env.JAVA_HOME, 'bin', 'java.exe'));
+  if (process.env.ProgramFiles) {
+    candidates.push(path.join(process.env.ProgramFiles, 'Java', 'jdk-17', 'bin', 'java.exe'));
+    candidates.push(path.join(process.env.ProgramFiles, 'Eclipse Adoptium', 'jdk-17', 'bin', 'java.exe'));
+  }
+  if (process.env['ProgramFiles(x86)']) {
+    candidates.push(path.join(process.env['ProgramFiles(x86)'], 'Java', 'jdk-17', 'bin', 'java.exe'));
+  }
+  candidates.push('java.exe');
+
+  for (const candidate of candidates) {
+    try {
+      const result = execFileSync(candidate, ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const text = `${result || ''}`;
+      if (/version\s+"17(?:[.\-]|$)/.test(text)) return candidate;
+    } catch (e) {
+      const text = `${e.stderr || ''}${e.stdout || ''}`;
+      if (/version\s+"17(?:[.\-]|$)/.test(text)) return candidate;
+    }
+  }
+  throw new Error('Java 17 x64 est requis pour Minecraft 1.20.1. Installe Java 17 x64 puis redémarre Novus.');
+}
 
 async function installFabric(manifest) {
   const installerPath = path.join(GAME_DIR, 'fabric-installer.jar');
+  const java = findJava();
   await download(FABRIC_INSTALLER_URL, installerPath, 'Fabric Installer');
   send('status', { text: `Installation de Fabric Loader ${manifest.fabricLoader}...` });
   await new Promise((resolve, reject) => {
-    const child = spawn(javaCommand(), ['-jar', installerPath, 'client', '-dir', GAME_DIR, '-mcversion', manifest.minecraft, '-loader', manifest.fabricLoader, '-noprofile', '-downloadMinecraft'], { windowsHide: true });
+    const child = spawn(java, ['-jar', installerPath, 'client', '-dir', GAME_DIR, '-mcversion', manifest.minecraft, '-loader', manifest.fabricLoader, '-noprofile', '-downloadMinecraft'], { windowsHide: true });
     let stderr = '';
     child.stderr.on('data', d => stderr += d.toString());
     child.stdout.on('data', d => { const text = d.toString().trim(); if (text) send('status', { text: text.split(/\r?\n/).filter(Boolean).pop() }); });
-    child.on('error', e => reject(new Error(`Java est introuvable. Installe Java 17 x64 puis redémarre Novus. ${e.message}`)));
+    child.on('error', e => reject(new Error(`Java/Fabric n'a pas pu démarrer : ${e.message}`)));
     child.on('close', code => code === 0 ? resolve() : reject(new Error(`Installation Fabric échouée (${code}). ${stderr.trim()}`)));
   });
   fs.rmSync(installerPath, { force: true });
@@ -110,15 +135,21 @@ async function launch(server) {
   await verifyMods(manifest);
   if (launchInProgress || gameProcess) throw new Error('Minecraft est déjà en cours de lancement ou déjà lancé.');
 
+  const java = findJava();
+  send('game-log', { text: `[NOVUS] Java sélectionné : ${java}` });
+  send('game-log', { text: `[NOVUS] Fabric : ${versionId}` });
+  send('game-log', { text: `[NOVUS] Version JSON : ${versionJson}` });
+  send('game-log', { text: `[NOVUS] Dossier Minecraft : ${GAME_DIR}` });
+
   launchInProgress = true;
   const launcher = new Client();
   gameLauncher = launcher;
 
-  launcher.on('debug', m => send('game-log', { text: String(m) }));
+  launcher.on('debug', m => send('game-log', { text: `[MCLC] ${String(m)}` }));
   launcher.on('data', m => send('game-log', { text: String(m) }));
   launcher.on('arguments', args => send('game-log', { text: `Minecraft arguments: ${Array.isArray(args) ? args.join(' ') : String(args)}` }));
   launcher.on('download-status', p => send('game-progress', p));
-  launcher.on('error', e => send('game-error', { message: e?.message || String(e) }));
+  launcher.on('error', e => send('game-error', { message: e?.stack || e?.message || String(e) }));
   launcher.on('close', code => {
     gameProcess = null;
     gameLauncher = null;
@@ -130,17 +161,13 @@ async function launch(server) {
   const options = {
     authorization: offlineAuth(manifest.playerName || 'NovusPlayer'),
     root: GAME_DIR,
-    // MCLC 3.18.2 expects the vanilla Minecraft version in `number` and
-    // the Fabric profile id in `custom`. `type: custom` is not used by MCLC.
-    version: { number: manifest.minecraft, custom: versionId },
+    version: { number: manifest.minecraft, type: 'release', custom: versionId },
     memory: { max: manifest.memoryMax || '4G', min: manifest.memoryMin || '2G' },
-    javaPath: javaCommand(),
-    overrides: {
-      detached: false,
-      versionJson: versionJson,
-      gameDirectory: GAME_DIR,
-      cwd: GAME_DIR
-    }
+    javaPath: java,
+    // Let MCLC resolve the Fabric version from root/versions/<custom>.
+    // Supplying versionJson/directory overrides here can make MCLC treat the
+    // inherited Fabric profile as a standalone version and produce no process.
+    overrides: { gameDirectory: GAME_DIR, cwd: GAME_DIR, detached: false }
   };
   if (server?.host) options.server = { host: server.host, port: Number(server.port || 25565) };
 
@@ -148,19 +175,17 @@ async function launch(server) {
   send('status', { text: server?.host ? `Connexion à ${server.host}...` : 'Lancement de Novus...' });
 
   try {
-    // minecraft-launcher-core 3.18.2 returns null when Java or launch
-    // preparation fails, and a ChildProcess when Minecraft actually starts.
-    // Do not attach `.on()` until after the promise has resolved.
     const processHandle = await launcher.launch(options);
     if (!processHandle || typeof processHandle.on !== 'function') {
       gameProcess = null;
       gameLauncher = null;
       launchInProgress = false;
-      throw new Error('Minecraft n’a pas pu être lancé. Consulte les logs Novus : Java 17 x64, Fabric et les fichiers du modpack doivent être valides.');
+      throw new Error('MCLC n’a créé aucun processus Minecraft. Vérifie le log [MCLC] ci-dessus : Java, le JSON Fabric, le jar Minecraft et les bibliothèques doivent être présents.');
     }
-
     gameProcess = processHandle;
     launchInProgress = false;
+    processHandle.on('error', error => send('game-error', { message: `Processus Minecraft : ${error.stack || error.message}` }));
+    processHandle.on('exit', (code, signal) => send('game-log', { text: `[NOVUS] Processus Minecraft terminé : code=${code}, signal=${signal || 'none'}` }));
     send('game-started', { started: true, pid: processHandle.pid || null });
     send('status', { text: 'Minecraft est lancé.' });
     return { ok: true, pid: processHandle.pid || null };
