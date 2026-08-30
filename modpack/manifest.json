@@ -9,7 +9,7 @@
   "memoryMax": "4G",
   "server": {
     "name": "Novus Modded",
-    "host": "play.novus.fr",
+    "host": "",
     "port": 25565
   },
   "mods": [
